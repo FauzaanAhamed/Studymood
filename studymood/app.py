@@ -1,23 +1,73 @@
 import streamlit as st
-import cv2
 import time
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from src.mood import MoodDetector
-from src.focus import FocusLogger
-from src.recommender import TaskRecommender
+
+# Try to import OpenCV with fallback
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    st.warning("⚠️ OpenCV not available - running in demo mode")
+
+# Import your custom modules with fallbacks
+try:
+    from src.mood import MoodDetector
+    from src.focus import FocusLogger
+    from src.recommender import TaskRecommender
+    MODULES_AVAILABLE = True
+except ImportError as e:
+    MODULES_AVAILABLE = False
+    # Create demo versions for cloud deployment
+    class DemoMoodDetector:
+        def __init__(self):
+            self.moods = ["Happy", "Neutral", "Serious", "Focused"]
+            self.current_mood_index = 0
+        
+        def detect_mood(self, frame=None):
+            # Cycle through moods for demo purposes
+            mood = self.moods[self.current_mood_index]
+            self.current_mood_index = (self.current_mood_index + 1) % len(self.moods)
+            
+            # Simulate focus score
+            focus = np.random.uniform(0.3, 0.9)
+            return mood, focus
+    
+    class DemoFocusLogger:
+        def get_focus_score(self):
+            # Simulate activity-based focus
+            return np.random.uniform(0.4, 0.8)
+    
+    class DemoTaskRecommender:
+        def suggest(self, mood, focus):
+            if focus < 0.3:
+                return "Take a 5-min break, stretch and relax."
+            if mood == "Sad":
+                return "Do an easy/creative task to lift mood."
+            if mood == "Happy" and focus > 0.6:
+                return "Great time for deep work (Pomodoro 25m)."
+            return "Continue with medium tasks and stay consistent."
+    
+    # Use demo versions
+    MoodDetector = DemoMoodDetector
+    FocusLogger = DemoFocusLogger
+    TaskRecommender = DemoTaskRecommender
 
 st.set_page_config(page_title="StudyMood", layout="wide", page_icon="🎯")
 
 # Load CSS from external file
 def load_css():
-    with open("styles.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    try:
+        with open("styles.css") as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.warning("⚠️ CSS file not found - using default styling")
 
 load_css()
 
-# Initialize session state
+# Session state
 if 'session_active' not in st.session_state:
     st.session_state.session_active = False
 if 'last_suggestion_time' not in st.session_state:
@@ -27,21 +77,21 @@ if 'current_suggestion' not in st.session_state:
 if 'session_data' not in st.session_state:
     st.session_state.session_data = []
 
-# Sidebar navigation with fixed contrast
+# Sidebar navigation
 with st.sidebar:
     st.markdown("""
     <div style='text-align: center; padding: 1rem;'>
-        <h1 style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+        <h1 style='background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%); 
                    -webkit-background-clip: text; 
                    -webkit-text-fill-color: transparent;
                    font-size: 2rem;
-                   margin-bottom: 2rem;'>🎯 StudyMood</h1>
+                   margin-bottom: 1rem;'>🎯 StudyMood</h1>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    # Navigation - fixed contrast
+    # Navigation
     st.markdown("**✨ Navigate to:**")
     page = st.radio(
         "",
@@ -73,6 +123,13 @@ with st.sidebar:
         duration = datetime.now() - st.session_state.session_start
         minutes = duration.seconds // 60
         st.metric("⏱️ Session Time", f"{minutes} minutes")
+    
+    # Deployment info
+    st.markdown("---")
+    if not CV2_AVAILABLE:
+        st.info("🔍 Running in Demo Mode")
+    if not MODULES_AVAILABLE:
+        st.info("🔄 Using Demo Modules")
 
 # Initialize components
 @st.cache_resource
@@ -87,7 +144,8 @@ def get_mood_emoji(mood):
         "Happy": "😊",
         "Neutral": "😌", 
         "Serious": "🤔",
-        "sad": "😔"
+        "Focused": "🧠",
+        "Sad": "😔"
     }
     return emoji_map.get(mood, "🤖")
 
@@ -131,13 +189,22 @@ if page == "Dashboard":
         
         with col1:
             st.markdown("### 📹 Live Camera Feed")
-            FRAME_WINDOW = st.image([])
             
-            camera = cv2.VideoCapture(0)
-            if not camera.isOpened():
-                st.error("❌ Camera not accessible")
-                st.stop()
-
+            # Camera handling with fallback
+            if CV2_AVAILABLE:
+                try:
+                    camera = cv2.VideoCapture(0)
+                    if camera.isOpened():
+                        FRAME_WINDOW = st.image([])
+                    else:
+                        raise Exception("Camera not accessible")
+                except:
+                    st.warning("📷 Camera not available - using demo mode")
+                    CV2_AVAILABLE = False
+            else:
+                st.info("🎭 Camera simulation mode active")
+                FRAME_WINDOW = st.image([])
+        
         with col2:
             st.markdown("### 📈 Live Metrics")
             
@@ -162,12 +229,23 @@ if page == "Dashboard":
 
         # Main monitoring loop
         while st.session_state.session_active:
-            ret, frame = camera.read()
-            if not ret:
-                break
+            # Create or capture frame
+            if CV2_AVAILABLE and 'camera' in locals():
+                ret, frame = camera.read()
+                if not ret:
+                    # If camera fails, switch to demo mode
+                    CV2_AVAILABLE = False
+                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(frame, "Camera Demo Mode", (150, 240), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            else:
+                # Demo frame
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "StudyMood Demo", (180, 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
             # Detect metrics
-            mood, face_focus = mood_detector.detect_mood(frame)
+            mood, face_focus = mood_detector.detect_mood(frame if CV2_AVAILABLE else None)
             activity_focus = focus_logger.get_focus_score()
             total_focus = round((face_focus * 0.6 + activity_focus * 0.4), 2)
             
@@ -204,7 +282,7 @@ if page == "Dashboard":
                     <div class='metric-card'>
                         <div class='mood-emoji'>{mood_emoji}</div>
                         <h3>Current Mood</h3>
-                        <h2 style='color: #667eea;'>{mood}</h2>
+                        <h2 style='color: #5a67d8;'>{mood}</h2>
                     </div>
                     """, unsafe_allow_html=True)
                 
@@ -230,16 +308,23 @@ if page == "Dashboard":
                     </div>
                     """, unsafe_allow_html=True)
 
-            # Camera frame with styling
-            cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (102, 126, 234), 2)
-            cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (118, 75, 162), 2)
+            # Add overlay to frame
+            if CV2_AVAILABLE:
+                cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (90, 103, 216), 2)
+                cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (107, 70, 193), 2)
+            else:
+                cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, "Demo Mode", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            FRAME_WINDOW.image(frame, use_container_width=True)  # Fixed deprecated parameter
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if CV2_AVAILABLE else frame
+            FRAME_WINDOW.image(frame, use_container_width=True)
             
             time.sleep(0.5)
         
-        camera.release()
+        # Cleanup
+        if CV2_AVAILABLE and 'camera' in locals():
+            camera.release()
 
 # Mood Analysis Page
 elif page == "Mood Analysis":
