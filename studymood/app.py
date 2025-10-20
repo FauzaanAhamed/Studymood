@@ -4,18 +4,286 @@ import time
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from src.mood import MoodDetector
-from src.focus import FocusLogger
-from src.recommender import TaskRecommender
+
+# Try to import OpenCV with fallback
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+# Import your custom modules with fallbacks
+try:
+    from src.mood import MoodDetector
+    from src.focus import FocusLogger
+    from src.recommender import TaskRecommender
+    MODULES_AVAILABLE = True
+except ImportError as e:
+    MODULES_AVAILABLE = False
+    # Create demo versions for cloud deployment
+    class DemoMoodDetector:
+        def __init__(self):
+            self.moods = ["Happy", "Neutral", "Serious", "Focused"]
+            self.current_mood_index = 0
+        
+        def detect_mood(self, frame=None):
+            # Cycle through moods for demo purposes
+            mood = self.moods[self.current_mood_index]
+            self.current_mood_index = (self.current_mood_index + 1) % len(self.moods)
+            
+            # Simulate focus score
+            focus = np.random.uniform(0.3, 0.9)
+            return mood, focus
+    
+    class DemoFocusLogger:
+        def get_focus_score(self):
+            # Simulate activity-based focus
+            return np.random.uniform(0.4, 0.8)
+    
+    class DemoTaskRecommender:
+        def suggest(self, mood, focus):
+            if focus < 0.3:
+                return "Take a 5-min break, stretch and relax."
+            if mood == "Sad" or mood == "sad":
+                return "Do an easy/creative task to lift mood."
+            if mood == "Happy" and focus > 0.6:
+                return "Great time for deep work (Pomodoro 25m)."
+            return "Continue with medium tasks and stay consistent."
+    
+    # Use demo versions
+    MoodDetector = DemoMoodDetector
+    FocusLogger = DemoFocusLogger
+    TaskRecommender = DemoTaskRecommender
 
 st.set_page_config(page_title="StudyMood", layout="wide", page_icon="🎯")
 
-# Load CSS from external file
-def load_css():
-    with open("styles.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+# CSS embedded directly in the app
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-load_css()
+* {
+    font-family: 'Inter', sans-serif;
+}
+
+.stApp {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #ffffff 100%) !important;
+}
+
+.main-header {
+    font-size: 2.8rem !important;
+    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 50%, #d53f8c 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-align: center;
+    margin-bottom: 1.5rem;
+    font-weight: 700;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.page-header {
+    font-size: 2.2rem !important;
+    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 2rem;
+    font-weight: 600;
+}
+
+.metric-card {
+    background: #ffffff !important;
+    padding: 1.5rem;
+    border-radius: 16px;
+    border: 2px solid #e2e8f0 !important;
+    box-shadow: 0 4px 20px rgba(90, 103, 216, 0.12) !important;
+    margin: 1rem 0;
+    transition: all 0.3s ease;
+    color: #2d3748 !important;
+    position: relative;
+    overflow: hidden;
+}
+
+.metric-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: linear-gradient(135deg, #5a67d8, #6b46c1);
+}
+
+.metric-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 30px rgba(90, 103, 216, 0.18) !important;
+    border-color: #cbd5e0 !important;
+}
+
+.metric-card h1,
+.metric-card h2,
+.metric-card h3,
+.metric-card h4,
+.metric-card h5,
+.metric-card h6,
+.metric-card p,
+.metric-card span,
+.metric-card div {
+    color: #2d3748 !important;
+}
+
+.suggestion-box {
+    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
+    color: #ffffff !important;
+    padding: 2rem;
+    border-radius: 16px;
+    margin: 1.5rem 0;
+    box-shadow: 0 8px 25px rgba(90, 103, 216, 0.3) !important;
+    border: 2px solid #4c51bf !important;
+    animation: fadeIn 0.8s ease-in;
+    position: relative;
+}
+
+.suggestion-box h1,
+.suggestion-box h2,
+.suggestion-box h3,
+.suggestion-box h4,
+.suggestion-box h5,
+.suggestion-box h6,
+.suggestion-box p,
+.suggestion-box span {
+    color: #ffffff !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.session-card {
+    background: linear-gradient(135deg, #fed7d7 0%, #feebc8 100%) !important;
+    color: #2d3748 !important;
+    padding: 1.5rem;
+    border-radius: 16px;
+    margin: 1rem 0;
+    box-shadow: 0 4px 20px rgba(237, 137, 54, 0.15) !important;
+    border: 2px solid #fbd38d !important;
+}
+
+.session-card h1,
+.session-card h2,
+.session-card h3,
+.session-card h4,
+.session-card h5,
+.session-card h6,
+.session-card p,
+.session-card span {
+    color: #2d3748 !important;
+}
+
+.focus-bar {
+    height: 16px;
+    background: linear-gradient(90deg, #e53e3e, #ed8936, #48bb78, #38a169) !important;
+    border-radius: 10px;
+    margin: 0.8rem 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    border: 1px solid #cbd5e0;
+}
+
+.stButton button {
+    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
+    color: #ffffff !important;
+    border: 2px solid #4c51bf !important;
+    border-radius: 12px;
+    padding: 0.8rem 1.5rem;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(90, 103, 216, 0.25) !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.stButton button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(90, 103, 216, 0.4) !important;
+    background: linear-gradient(135deg, #6b46c1 0%, #5a67d8 100%) !important;
+    border-color: #5a67d8 !important;
+    color: #ffffff !important;
+}
+
+.stRadio > div {
+    background: #ffffff !important;
+    padding: 1rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
+    color: #2d3748 !important;
+    border: 2px solid #e2e8f0;
+}
+
+.stRadio label {
+    color: #2d3748 !important;
+    font-weight: 500;
+}
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%) !important;
+    border-right: 2px solid #e2e8f0 !important;
+}
+
+section[data-testid="stSidebar"] * {
+    color: #2d3748 !important;
+}
+
+.stMetric {
+    background: #ffffff !important;
+    padding: 1rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
+    color: #2d3748 !important;
+    border: 2px solid #e2e8f0;
+}
+
+.stMetric label, .stMetric div {
+    color: #2d3748 !important;
+    font-weight: 500;
+}
+
+@keyframes fadeIn {
+    from { 
+        opacity: 0; 
+        transform: translateY(20px); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0); 
+    }
+}
+
+.mood-emoji {
+    font-size: 3rem;
+    text-align: center;
+    margin: 1rem 0;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+}
+
+.divider {
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #5a67d8, #6b46c1, transparent);
+    margin: 2rem 0;
+    border: none;
+    border-radius: 2px;
+}
+
+.stMarkdown, 
+.stText, 
+.stTitle, 
+.stHeader, 
+.stSubheader,
+.stAlert,
+.stInfo,
+.stSuccess,
+.stWarning,
+.stError {
+    color: #2d3748 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # Session state
 if 'session_active' not in st.session_state:
@@ -87,6 +355,8 @@ def get_mood_emoji(mood):
         "Happy": "😊",
         "Neutral": "😌", 
         "Serious": "🤔",
+        "Focused": "🧠",
+        "Sad": "😔",
         "sad": "😔"
     }
     return emoji_map.get(mood, "🤖")
