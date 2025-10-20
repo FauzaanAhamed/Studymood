@@ -1,69 +1,19 @@
 import streamlit as st
+import cv2
 import time
 import numpy as np
 import pandas as pd
 from datetime import datetime
-
-# Try to import OpenCV with fallback
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    CV2_AVAILABLE = False
-    st.warning("⚠️ OpenCV not available - running in demo mode")
-
-# Import your custom modules with fallbacks
-try:
-    from src.mood import MoodDetector
-    from src.focus import FocusLogger
-    from src.recommender import TaskRecommender
-    MODULES_AVAILABLE = True
-except ImportError as e:
-    MODULES_AVAILABLE = False
-    # Create demo versions for cloud deployment
-    class DemoMoodDetector:
-        def __init__(self):
-            self.moods = ["Happy", "Neutral", "Serious", "Focused"]
-            self.current_mood_index = 0
-        
-        def detect_mood(self, frame=None):
-            # Cycle through moods for demo purposes
-            mood = self.moods[self.current_mood_index]
-            self.current_mood_index = (self.current_mood_index + 1) % len(self.moods)
-            
-            # Simulate focus score
-            focus = np.random.uniform(0.3, 0.9)
-            return mood, focus
-    
-    class DemoFocusLogger:
-        def get_focus_score(self):
-            # Simulate activity-based focus
-            return np.random.uniform(0.4, 0.8)
-    
-    class DemoTaskRecommender:
-        def suggest(self, mood, focus):
-            if focus < 0.3:
-                return "Take a 5-min break, stretch and relax."
-            if mood == "Sad":
-                return "Do an easy/creative task to lift mood."
-            if mood == "Happy" and focus > 0.6:
-                return "Great time for deep work (Pomodoro 25m)."
-            return "Continue with medium tasks and stay consistent."
-    
-    # Use demo versions
-    MoodDetector = DemoMoodDetector
-    FocusLogger = DemoFocusLogger
-    TaskRecommender = DemoTaskRecommender
+from src.mood import MoodDetector
+from src.focus import FocusLogger
+from src.recommender import TaskRecommender
 
 st.set_page_config(page_title="StudyMood", layout="wide", page_icon="🎯")
 
 # Load CSS from external file
 def load_css():
-    try:
-        with open("styles.css") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except FileNotFoundError:
-        st.warning("⚠️ CSS file not found - using default styling")
+    with open("styles.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 load_css()
 
@@ -123,13 +73,6 @@ with st.sidebar:
         duration = datetime.now() - st.session_state.session_start
         minutes = duration.seconds // 60
         st.metric("⏱️ Session Time", f"{minutes} minutes")
-    
-    # Deployment info
-    st.markdown("---")
-    if not CV2_AVAILABLE:
-        st.info("🔍 Running in Demo Mode")
-    if not MODULES_AVAILABLE:
-        st.info("🔄 Using Demo Modules")
 
 # Initialize components
 @st.cache_resource
@@ -144,8 +87,7 @@ def get_mood_emoji(mood):
         "Happy": "😊",
         "Neutral": "😌", 
         "Serious": "🤔",
-        "Focused": "🧠",
-        "Sad": "😔"
+        "sad": "😔"
     }
     return emoji_map.get(mood, "🤖")
 
@@ -157,6 +99,27 @@ def get_focus_level(focus_score):
         return "Medium Focus 💪", "#f59e0b"
     else:
         return "Low Focus 😴", "#ef4444"
+
+# Camera initialization function
+def initialize_camera():
+    """Initialize camera with cloud compatibility"""
+    try:
+        # Try different camera indices for cloud compatibility
+        for camera_index in [0, 1, 2]:
+            camera = cv2.VideoCapture(camera_index)
+            if camera.isOpened():
+                # Test if camera can read frames
+                ret, frame = camera.read()
+                if ret:
+                    st.success(f"✅ Camera {camera_index} initialized successfully!")
+                    return camera
+                camera.release()
+        
+        st.warning("⚠️ No functional camera found. The app will run with simulated camera feed.")
+        return None
+    except Exception as e:
+        st.warning(f"⚠️ Camera initialization failed: {str(e)}")
+        return None
 
 # Dashboard Page
 if page == "Dashboard":
@@ -177,9 +140,9 @@ if page == "Dashboard":
             st.markdown("""
             <div class='metric-card'>
                 <h3>✨ How It Works</h3>
-                <p>• Real-time mood detection</p>
-                <p>• Focus level tracking</p>
-                <p>• Smart task suggestions</p>
+                <p>• Real-time mood detection using your camera</p>
+                <p>• Focus level tracking with activity monitoring</p>
+                <p>• Smart task suggestions based on your state</p>
             </div>
             """, unsafe_allow_html=True)
         
@@ -190,21 +153,19 @@ if page == "Dashboard":
         with col1:
             st.markdown("### 📹 Live Camera Feed")
             
-            # Camera handling with fallback
-            if CV2_AVAILABLE:
-                try:
-                    camera = cv2.VideoCapture(0)
-                    if camera.isOpened():
-                        FRAME_WINDOW = st.image([])
-                    else:
-                        raise Exception("Camera not accessible")
-                except:
-                    st.warning("📷 Camera not available - using demo mode")
-                    CV2_AVAILABLE = False
-            else:
-                st.info("🎭 Camera simulation mode active")
-                FRAME_WINDOW = st.image([])
-        
+            # Initialize camera
+            camera = initialize_camera()
+            FRAME_WINDOW = st.image([])
+            
+            if camera is None:
+                # Create a static informational frame
+                static_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(static_frame, "Camera Not Available", (150, 200), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(static_frame, "Running in Analysis Mode", (120, 250), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                FRAME_WINDOW.image(static_frame)
+
         with col2:
             st.markdown("### 📈 Live Metrics")
             
@@ -229,23 +190,24 @@ if page == "Dashboard":
 
         # Main monitoring loop
         while st.session_state.session_active:
-            # Create or capture frame
-            if CV2_AVAILABLE and 'camera' in locals():
+            # Handle camera frame
+            if camera and camera.isOpened():
                 ret, frame = camera.read()
                 if not ret:
-                    # If camera fails, switch to demo mode
-                    CV2_AVAILABLE = False
+                    # Camera failed, create a placeholder
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(frame, "Camera Demo Mode", (150, 240), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    cv2.putText(frame, "Camera Feed Unavailable", (120, 240), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             else:
-                # Demo frame
+                # No camera, create analysis mode frame
                 frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(frame, "StudyMood Demo", (180, 240), 
+                cv2.putText(frame, "Study Analysis Mode", (160, 220), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(frame, "Tracking Focus & Activity", (140, 260), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-            # Detect metrics
-            mood, face_focus = mood_detector.detect_mood(frame if CV2_AVAILABLE else None)
+            # Detect metrics (mood detector will handle no-face scenarios)
+            mood, face_focus = mood_detector.detect_mood(frame)
             activity_focus = focus_logger.get_focus_score()
             total_focus = round((face_focus * 0.6 + activity_focus * 0.4), 2)
             
@@ -309,21 +271,19 @@ if page == "Dashboard":
                     """, unsafe_allow_html=True)
 
             # Add overlay to frame
-            if CV2_AVAILABLE:
-                cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (90, 103, 216), 2)
-                cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (107, 70, 193), 2)
-            else:
-                cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(frame, "Demo Mode", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(frame, f"Mood: {mood}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (90, 103, 216), 2)
+            cv2.putText(frame, f"Focus: {total_focus}", (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (107, 70, 193), 2)
             
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if CV2_AVAILABLE else frame
+            if not camera:
+                cv2.putText(frame, "Cloud Mode", (30, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             FRAME_WINDOW.image(frame, use_container_width=True)
             
             time.sleep(0.5)
         
         # Cleanup
-        if CV2_AVAILABLE and 'camera' in locals():
+        if camera:
             camera.release()
 
 # Mood Analysis Page
